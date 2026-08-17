@@ -97,6 +97,7 @@ from flaggems_vllm.ops.per_token_group_quant_fp8 import (
     SUPPORTED_FP8_DTYPE,
     per_token_group_quant_fp8,
 )
+from flaggems_vllm.ops.persistent_topk import persistent_topk
 from flaggems_vllm.ops.reglu import dreglu, reglu
 from flaggems_vllm.ops.reshape_and_cache import reshape_and_cache
 from flaggems_vllm.ops.reshape_and_cache_flash import reshape_and_cache_flash
@@ -104,6 +105,7 @@ from flaggems_vllm.ops.rotary_embedding import apply_rotary_pos_emb
 from flaggems_vllm.ops.router_gemm import router_gemm
 from flaggems_vllm.ops.rwkv_ka_fusion import rwkv_ka_fusion
 from flaggems_vllm.ops.rwkv_mm_sparsity import rwkv_mm_sparsity
+from flaggems_vllm.ops.scaled_int8_quant import scaled_int8_quant
 from flaggems_vllm.ops.silu_and_mul import silu_and_mul, silu_and_mul_out
 from flaggems_vllm.ops.silu_and_mul_with_clamp import (
     silu_and_mul_with_clamp,
@@ -193,12 +195,14 @@ __all__ = [
     "parallel_nsa_compression",
     "pack_seq_triton",
     "per_token_group_quant_fp8",
+    "persistent_topk",
     "reglu",
     "reshape_and_cache",
     "reshape_and_cache_flash",
     "router_gemm",
     "rwkv_ka_fusion",
     "rwkv_mm_sparsity",
+    "scaled_int8_quant",
     "silu_and_mul",
     "silu_and_mul_out",
     "silu_and_mul_with_clamp",
