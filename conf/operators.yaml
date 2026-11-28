@@ -1502,6 +1502,47 @@ ops:
   - NeuralNetwork
   stages:
   - beta: '0.3'
+- id: grouped_matmul_swiglu_quant_v2
+  description: 'MX-FP8 grouped matmul fused with SwiGLU and MX dynamic quantization
+
+    for Ascend 950DT (A5 / arch35), replacing the CANN
+
+    GroupedMatmulSwigluQuantV2 call behind vllm-ascend''s MoE
+
+    `apply_gmm1_act_quant` for the MXFP8 path (`dequant_mode=2,
+
+    quant_mode=2`). The implementation lives under
+
+    `runtime/backend/_ascend/a5/ops/` and fuses three steps in one kernel,
+
+    keeping the FP32 `[M, N]` intermediate off global memory: grouped matmul
+
+    with MX dequant, SwiGLU over the two N halves, then per-32 MX dynamic
+
+    quantization to FP8_E4M3FN plus an E8M0 scale. SwiGLU takes alpha=1 with
+
+    no bias or clamp and the quantization uses the OCP scale algorithm, which
+
+    is what V2 exposes; rows outside group_list are left unwritten, as in the
+
+    vendor operator. ND and FRACTAL_NZ weights are both supported and the
+
+    layout is detected from the ACL descriptor, so callers pass no extra
+
+    argument. Output and scale are byte-exact with CANN.
+
+    '
+  for:
+  - torch_npu.npu_grouped_matmul_swiglu_quant_v2
+  labels:
+  - fused
+  - vLLM
+  - Quantization
+  - MoE
+  kind:
+  - BLAS
+  stages:
+  - beta: '0.3'
 - id: grouped_topk
   description: 'A specialized routing mechanism used in Mixture-of-Experts (MoE) models
     (like DeepSeek-V3/R1)

@@ -46,6 +46,11 @@ SHAPES = {
     "qwen": dict(M=16, K=512, N=2048, E=128, name="Qwen3.6"),
 }
 
+# Rate of FP8 values allowed to pick the adjacent code at an exact tie when
+# compared against the torch reference; same bound as the SwiGLU group-quant
+# test uses.  Measured here: 3/196608 and 1/16384.
+TIE_RATE = 2e-4
+
 
 def grouped_matmul_swiglu_quant_v2_ref(
     x: torch.Tensor,
@@ -179,24 +184,52 @@ def vendor(x, w, sb, sa, gl):
     )
 
 
-def compare(tag, y, ys, ry, rys, valid, nh):
-    """Accuracy check: bitwise equality also confirms the same hardware path."""
+def scale_bytes(s, valid, nh):
+    """Scales as uint8 ints for comparison.
+
+    The vendor operator returns ``float8_e8m0fnu``, whose ``.int()`` aborts in
+    ``aclnnInplaceCopy`` (error 561103); only a byte view can be converted.
+    """
+    if s.dtype != torch.uint8:
+        s = s.view(torch.uint8)
+    return s.reshape(s.shape[0], -1)[:valid, : nh // MX_BLOCK].int()
+
+
+def compare(tag, y, ys, ry, rys, valid, nh, tie_rate=0.0):
+    """Accuracy check: bitwise equality also confirms the same hardware path.
+
+    ``tie_rate`` is for comparisons against the torch reference only.  Both
+    sides round the SwiGLU result to BF16 before quantising, but they
+    accumulate the matmul in different orders, so a block value can land on
+    opposite sides of an exact FP8 tie and pick the adjacent FP8 value.  That
+    is bounded as a rate over the whole tensor instead of as a value
+    tolerance, which would also accept a real error.  Scales are never given
+    that slack, and neither is the vendor comparison.
+    """
     yf = y[:valid].float()
     rf = ry[:valid].float()
     dy = (yf - rf).abs().max().item()
     nbad = (yf != rf).sum().item()
-    a = ys.reshape(ys.shape[0], -1)[:valid, : nh // MX_BLOCK].int()
-    b = rys.reshape(rys.shape[0], -1)[:valid, : nh // MX_BLOCK].int()
+    a = scale_bytes(ys, valid, nh)
+    b = scale_bytes(rys, valid, nh)
     ds = (a - b).abs().max().item()
     sbad = (a != b).sum().item()
-    verdict = "bitwise equal" if (nbad == 0 and sbad == 0) else "differ"
+    allowed = max(1, int(tie_rate * yf.numel())) if tie_rate else 0
+    ok = nbad <= allowed and sbad == 0
+    if nbad == 0 and sbad == 0:
+        verdict = "bitwise equal"
+    elif ok:
+        verdict = f"within the {tie_rate:g} FP8 tie rate"
+    else:
+        verdict = "differ"
     print(
         f"  {tag:20s} y max_absdiff {dy:<10g} y diff {nbad}/{yf.numel()}  "
         f"scale max_absdiff {ds} diff {sbad}/{a.numel()}   {verdict}"
     )
-    return nbad == 0 and sbad == 0
+    return ok
 
 
+@pytest.mark.grouped_matmul_swiglu_quant_v2
 @pytest.mark.parametrize("shape", ["glm_w8", "qwen"])
 @pytest.mark.parametrize("scale_alg", [0, 1])
 def test_grouped_matmul_swiglu_quant_v2(shape, scale_alg, capsys):
@@ -218,10 +251,13 @@ def test_grouped_matmul_swiglu_quant_v2(shape, scale_alg, capsys):
         x, w, sb, sa, gl, group_list_type=0, scale_alg=scale_alg
     )
     n = min(valid, rvalid)
-    ok = compare("triton vs torch", ty, tys, ry, rys, n, NH)
+    ok = compare("triton vs torch", ty, tys, ry, rys, n, NH, tie_rate=TIE_RATE)
 
-    vy, vys = vendor(x, w, sb, sa, gl)
-    ok &= compare("vendor vs torch", vy, vys, ry, rys, n, NH)
-    ok &= compare("triton vs vendor", ty, tys, vy, vys, valid, NH)
+    if scale_alg == 0:
+        # The vendor operator only implements the OCP scale algorithm, so it is
+        # the baseline for scale_alg=0 and says nothing about scale_alg=1.
+        vy, vys = vendor(x, w, sb, sa, gl)
+        ok &= compare("vendor vs torch", vy, vys, ry, rys, n, NH, tie_rate=TIE_RATE)
+        ok &= compare("triton vs vendor", ty, tys, vy, vys, valid, NH)
 
     assert ok, capsys.readouterr().out

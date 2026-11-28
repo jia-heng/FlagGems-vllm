@@ -678,6 +678,42 @@ class SwigluGroupQuantPlan:
         )
 
 
+# Plans are cached because building one runs the kernel: __init__ tries its
+# tile candidates with a real launch plus a synchronize, so a plan per call
+# executes _sgq_kernel twice and allocates (and zeroes) a throwaway scale
+# buffer.  Measured on T=4096 D=4096: 33.7us of kernel time became 67.5us plus
+# a 6.4us ZerosLike.  The cache key is everything __init__ bakes into the
+# bound launch arguments; __call__ re-checks shape and dtype on top of that.
+_PLAN_CACHE: dict[tuple, SwigluGroupQuantPlan] = {}
+_PLAN_CACHE_MAX = 256
+
+
+def _plan_key(
+    x,
+    weight,
+    group_index,
+    dst_type,
+    quant_mode,
+    block_size,
+    round_scale,
+    clamp_limit,
+    output_origin,
+):
+    return (
+        tuple(x.shape),
+        x.dtype,
+        x.device.index,
+        dst_type,
+        quant_mode,
+        block_size,
+        (quant_mode == 1) if round_scale is None else bool(round_scale),
+        float(clamp_limit if clamp_limit is not None else -1.0),
+        bool(output_origin),
+        weight is not None,
+        group_index.numel() if group_index is not None else -1,
+    )
+
+
 def swiglu_group_quant(
     x,
     weight=None,
@@ -702,8 +738,11 @@ def swiglu_group_quant(
     in ``out`` / ``scale``, which is what the vendor does -- pass your own
     buffers if that tail matters.  MX scale defaults to ``float8_e8m0fnu``;
     a ``uint8`` ``scale=`` buffer is accepted as packed E8M0 bytes.
+
+    The plan is built once per configuration and reused; hold a
+    ``SwigluGroupQuantPlan`` yourself only to skip the dict lookup.
     """
-    plan = SwigluGroupQuantPlan(
+    key = _plan_key(
         x,
         weight,
         group_index,
@@ -714,4 +753,22 @@ def swiglu_group_quant(
         clamp_limit,
         output_origin,
     )
+    plan = _PLAN_CACHE.get(key)
+    if plan is None:
+        plan = SwigluGroupQuantPlan(
+            x,
+            weight,
+            group_index,
+            dst_type,
+            quant_mode,
+            block_size,
+            round_scale,
+            clamp_limit,
+            output_origin,
+        )
+        if len(_PLAN_CACHE) >= _PLAN_CACHE_MAX:
+            # Serving walks through many token counts; drop the oldest entry
+            # rather than letting the cache grow without bound.
+            _PLAN_CACHE.pop(next(iter(_PLAN_CACHE)))
+        _PLAN_CACHE[key] = plan
     return plan(x, weight, group_index, out=out, scale=scale, y_origin=y_origin)

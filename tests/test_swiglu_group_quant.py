@@ -125,16 +125,19 @@ def _check_case(
     assert actual[1].dtype == expected[1].dtype
 
 
+@pytest.mark.swiglu_group_quant
 @pytest.mark.parametrize("T", [1, 7, 64, 256, 1023])
 def test_mx_basic_and_row_tail(T):
     _check_case(T, 4096)
 
 
+@pytest.mark.swiglu_group_quant
 @pytest.mark.parametrize("D", [256, 512, 1536, 2560, 3584, 8192, 14336])
 def test_hidden_sizes_and_overlapping_columns(D):
     _check_case(64, D)
 
 
+@pytest.mark.swiglu_group_quant
 @pytest.mark.parametrize("mode,rounded", [(1, True), (0, True), (0, False)])
 @pytest.mark.parametrize("dst_type", [torch.float8_e4m3fn, torch.float8_e5m2])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
@@ -144,6 +147,7 @@ def test_quant_modes_and_dtypes(mode, rounded, dst_type, dtype):
     )
 
 
+@pytest.mark.swiglu_group_quant
 @pytest.mark.parametrize("mode", [0, 1])
 def test_optional_inputs(mode):
     _check_case(
@@ -151,6 +155,7 @@ def test_optional_inputs(mode):
     )
 
 
+@pytest.mark.swiglu_group_quant
 @pytest.mark.parametrize("counts", [[70], [17, 18, 17, 18]])
 @pytest.mark.parametrize("mode", [0, 1])
 def test_group_index_tail_is_untouched(counts, mode):
@@ -176,11 +181,13 @@ def test_group_index_tail_is_untouched(counts, mode):
     _check_bytes("untouched scale tail", actual[1][real:], scale0[real:])
 
 
+@pytest.mark.swiglu_group_quant
 @pytest.mark.parametrize("mode,rounded", [(1, True), (0, True), (0, False)])
 def test_signed_zero(mode, rounded):
     _check_case(64, 4096, quant_mode=mode, round_scale=rounded, zeros=True)
 
 
+@pytest.mark.swiglu_group_quant
 def test_multiple_specializations_and_reused_plan():
     # A cached compile must not bind another mode's binary.
     x = torch.randn(64, 1024, device="npu", dtype=torch.float16)
@@ -194,6 +201,7 @@ def test_multiple_specializations_and_reused_plan():
             _check_scale(actual[1], expected[1], mode == 0 and not rounded)
 
 
+@pytest.mark.swiglu_group_quant
 def test_higher_rank_scale_shape():
     x = torch.randn(2, 3, 4, 1024, device="npu", dtype=torch.bfloat16)
     # Unlike this op's MX default, the vendor defaults to block mode 0.
@@ -205,6 +213,7 @@ def test_higher_rank_scale_shape():
     assert actual[1].dtype == expected[1].dtype
 
 
+@pytest.mark.swiglu_group_quant
 def test_mx_uint8_scale_buffer_is_preserved():
     x = torch.randn(4, 1024, device="npu", dtype=torch.bfloat16)
     scale = torch.empty(4, 8, 2, dtype=torch.uint8, device="npu")
@@ -215,6 +224,7 @@ def test_mx_uint8_scale_buffer_is_preserved():
     _check_bytes("scale", actual[1], expected[1])
 
 
+@pytest.mark.swiglu_group_quant
 def test_invalid_input_raises():
     x = torch.randn(4, 512, device="npu", dtype=torch.bfloat16)
     with pytest.raises(ValueError, match="quant_mode 2"):

@@ -345,6 +345,7 @@ def _mxquant_kernel(
     ROWS: tl.constexpr,
     NB: tl.constexpr,
     PROGS: tl.constexpr,
+    CEIL: tl.constexpr,
 ):
     """Second kernel for split path: bf16 [M, NH] -> fp8_e4m3 + e8m0 scale.
 
@@ -352,6 +353,8 @@ def _mxquant_kernel(
     does not pay the BLOCK_M/group_m padding overhead of the fused epilogue.
     One program consumes ROWS full rows (W = NB*32).  Columns are not tiled:
     partial-row tiles would produce strided DMA, which is significantly slower.
+    The scale derivation mirrors the fused epilogue, ``CEIL`` included, so both
+    paths answer ``scale_alg`` the same way.
     """
     pid = tl.program_id(0)
     MXC: tl.constexpr = 32  # literal: jit cannot read module-level globals
@@ -378,11 +381,19 @@ def _mxquant_kernel(
             ab = af.to(tl.int32, bitcast=True)
             ef = (ab >> 23) & 0xFF
             eb = ef - 8
+            if CEIL:
+                eb = eb + ((ab & 0x7FFFFF) > 0x600000).to(tl.int32)
             nan = ef == 0xFF
-            flush = (eb <= 0) | nan
+            if CEIL:
+                flush = nan
+            else:
+                flush = (eb <= 0) | nan
             ebs = tl.where(nan, 255, tl.maximum(eb, 0))
             rc = ((254 - tl.minimum(ebs, 254)) << 23).to(tl.float32, bitcast=True)
-            cap = tl.where(flush, 0, (mm.to(tl.int32) & ~MANT) | FM)
+            if CEIL:
+                cap = tl.where(nan, 0, MAG)
+            else:
+                cap = tl.where(flush, 0, (mm.to(tl.int32) & ~MANT) | FM)
             sgn = (xi & SGN).to(tl.int16)
             src = (tl.minimum(mg, cap[:, None].to(tl.int16)) | sgn).to(tl.int16)
             q = src.to(tl.bfloat16, bitcast=True).to(tl.float32) * rc[:, None]
@@ -618,7 +629,16 @@ def grouped_matmul_swiglu_quant_v2(
         rows = quant_rows or _pick_quant_rows(M, cores, NH)
         progs = min(cores * 2, max(1, -(-M // rows)))
         _mxquant_kernel[(progs,)](
-            mid, y, ys, M, NH=NH, NSP=nblk, ROWS=rows, NB=nblk, PROGS=progs
+            mid,
+            y,
+            ys,
+            M,
+            NH=NH,
+            NSP=nblk,
+            ROWS=rows,
+            NB=nblk,
+            PROGS=progs,
+            CEIL=(scale_alg == 1),
         )
     if dump:
         return y, ys.reshape(M, nblk // 2, 2), dg, du
