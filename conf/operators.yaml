@@ -1722,6 +1722,54 @@ ops:
   - NeuralNetwork
   stages:
   - alpha: '5.4'
+- id: kv_quant_sparse_flash_attention
+  description: 'Sparse MLA-absorb attention over an FP8 per-tile quantized paged KV
+    cache
+
+    for Ascend 950DT (A5 / arch35), replacing the CANN
+
+    `npu_kv_quant_sparse_flash_attention` call behind vllm-ascend''s
+
+    `_execute_kv_quant_sparse_flash_attention_vllm` in the decode shape it uses
+
+    (`sparse_mode=3`, `attention_mode=2`, `sparse_block_size=1`,
+
+    `quant_scale_repo_mode=1`, `tile_size=128`, `rope_head_dim=64`, TND query
+
+    and PA_BSND cache). The implementation lives under
+
+    `runtime/backend/_ascend/a5/ops/` and reads the 656-byte cache slot
+
+    (fp8_e4m3 nope, which under MLA-absorb is also V, plus bf16 rope and four
+
+    fp32 per-tile scales) through three zero-copy views, dequantizes on the
+
+    fly, and splits the sparse dimension flash-decoding style with a combine
+
+    kernel, because a decode step only has the query heads to parallelize
+
+    over. A slot takes part only when its index is not the -1 sentinel and its
+
+    position is below `min(sparse_size, actual_seq_lengths_kv)`, so
+
+    `actual_seq_lengths_kv` is a required input. Prefill (Q_S > 1), softmax
+
+    LSE output, `sparse_block_size > 1`, `sparse_mode=0` and the int8 /
+
+    hifloat8 / TQ4 cache layouts are not covered and raise.
+
+    '
+  for:
+  - torch_npu.npu_kv_quant_sparse_flash_attention
+  labels:
+  - fused
+  - vLLM
+  - Attention
+  - Quantization
+  kind:
+  - Attention
+  stages:
+  - beta: '0.3'
 - id: kv_rmsnorm_rope_cache
   description: 'Fused KV RMSNorm + RoPE + paged-KV cache writeback: splits a fused
     KV
